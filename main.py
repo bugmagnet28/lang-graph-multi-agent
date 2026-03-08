@@ -1,24 +1,31 @@
 from langchain_core.messages import HumanMessage
+from rag.vectorstore import load_vectorstore, get_retriever
+from tools import get_all_tools
 from agents.graph import build_graph
-from memory import new_session, DEFAULT_SESSION
+from memory import new_session
 
-def run_single_query(query: str):
-    """Run a one-shot query with no memory."""
-    graph = build_graph(with_memory=False)
-    result = graph.invoke({"messages": [HumanMessage(content=query)]})
-    return result["messages"][-1].content
+def main():
+    print("🔄 Loading vectorstore...")
+    try:
+        vectorstore = load_vectorstore()
+        retriever = get_retriever(vectorstore, k=4)
+        print("✅ Documents loaded — agent can search your files")
+    except FileNotFoundError:
+        print("⚠️  No documents found. Run `python ingest.py` to add documents.")
+        print("   Continuing with web search and calculator only.\n")
+        retriever = None
 
-
-def run_conversation(session_id: str = DEFAULT_SESSION):
-    """Run an interactive multi-turn conversation with memory."""
-    graph = build_graph(with_memory=True)
+    tools = get_all_tools(retriever) if retriever else get_all_tools_no_rag()
+    graph = build_graph(tools, with_memory=True)
+    session_id = new_session()
     config = {"configurable": {"thread_id": session_id}}
 
-    print("=" * 60)
-    print("🤖 ReAct Agent — Multi-Turn Conversation Mode")
-    print(f"   Session ID: {session_id}")
-    print("   Type 'exit' to quit | 'new' to start a new session")
-    print("=" * 60)
+    print("\n" + "="*60)
+    print("🤖 ReAct + RAG Agent")
+    print(f"   Session: {session_id}")
+    print("   Tools: web search | document search | calculator")
+    print("   Type 'exit' to quit")
+    print("="*60)
 
     while True:
         user_input = input("\nYou: ").strip()
@@ -28,35 +35,21 @@ def run_conversation(session_id: str = DEFAULT_SESSION):
         if user_input.lower() == "exit":
             print("Goodbye!")
             break
-        if user_input.lower() == "new":
-            session_id = new_session()
-            config = {"configurable": {"thread_id": session_id}}
-            print(f"New session started: {session_id}")
-            continue
 
-        print("\nAgent: ", end="", flush=True)
-
-        # Stream response token by token
         for chunk in graph.stream(
             {"messages": [HumanMessage(content=user_input)]},
             config=config,
             stream_mode="values"
         ):
             last = chunk["messages"][-1]
-            # Only print final LLM text responses, not tool call internals
             if hasattr(last, "content") and last.content and not getattr(last, "tool_calls", None):
                 print(f"\nAgent: {last.content}")
                 break
 
+def get_all_tools_no_rag():
+    from tools.search_tool import search
+    from tools.calculator_tool import calculator
+    return [search, calculator]
 
 if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) > 1:
-        # Single query mode: python main.py "What is the GDP of India?"
-        query = " ".join(sys.argv[1:])
-        print(f"\nQuery: {query}")
-        print(f"\nAnswer: {run_single_query(query)}")
-    else:
-        # Interactive conversation mode
-        run_conversation(session_id=new_session())
+    main()
